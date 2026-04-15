@@ -1,0 +1,788 @@
+import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_database/firebase_database.dart';
+import 'package:fl_chart/fl_chart.dart';
+import 'dart:math' as math;
+import 'firebase_options.dart';
+
+// ─────────────────────────────────────────────
+// نظام الترجمة
+// ─────────────────────────────────────────────
+enum AppLanguage { arabic, english }
+
+class AppStrings {
+  final AppLanguage lang;
+  const AppStrings(this.lang);
+
+  bool get isAr => lang == AppLanguage.arabic;
+
+  String get appTitle        => isAr ? 'النبتة الذكية'               : 'Smart Plant';
+  String get demoMode        => isAr ? 'وضع تجريبي'                   : 'Demo Mode';
+  String get liveData        => isAr ? 'بيانات مباشرة'                : 'ESP32 Live Data';
+  String get moisture        => isAr ? 'الرطوبة'                      : 'Moisture';
+  String get temperature     => isAr ? 'الحرارة'                      : 'Temp';
+  String get light           => isAr ? 'الإضاءة'                      : 'Light';
+  String get plantStatus     => isAr ? 'حالة النبتة'                  : 'Plant Status';
+  String get healthy         => isAr ? 'بصحة جيدة'                    : 'Healthy';
+  String get needsWater      => isAr ? 'تحتاج ماء'                    : 'Needs Water';
+  String get waterNow        => isAr ? 'ري الآن'                      : 'Water Now';
+  String get watering        => isAr ? 'جارٍ الري...'                  : 'Watering...';
+  String get pumpOn          => isAr ? 'تم إرسال أمر التشغيل 💧'      : 'Pump activated 💧';
+  String get pumpFailed      => isAr ? 'فشل الإرسال'                   : 'Send failed';
+  String get autoIrrigation  => isAr ? 'الري التلقائي'                 : 'Auto Irrigation';
+  String get autoOn          => isAr ? 'الري التلقائي مفعّل'           : 'Auto irrigation enabled';
+  String get autoOff         => isAr ? 'الري التلقائي معطّل'           : 'Auto irrigation disabled';
+  String get navHome         => isAr ? 'الرئيسية'                      : 'Home';
+  String get navStats        => isAr ? 'الإحصاء'                       : 'Stats';
+  String get navSettings     => isAr ? 'الإعدادات'                     : 'Settings';
+  String get statistics      => isAr ? 'الإحصاءات'                     : 'Statistics';
+  String get chartLabel      => isAr ? 'مستوى الرطوبة عبر الزمن'      : 'Moisture Level over Time';
+  String get waitingData     => isAr ? 'في انتظار البيانات...'         : 'Waiting for data...';
+  String get connError       => isAr ? 'تعذّر الاتصال'                 : 'Connection failed';
+  String get settings        => isAr ? 'الإعدادات'                     : 'Settings';
+  String get threshold       => isAr ? 'عتبة الرطوبة (%)'             : 'Moisture Threshold (%)';
+  String get saveSettings    => isAr ? 'حفظ الإعدادات'                 : 'Save Settings';
+  String get savedCloud      => isAr ? 'تم الحفظ في السحابة ✅'        : 'Saved to Cloud ✅';
+  String get language        => isAr ? 'اللغة'                         : 'Language';
+  String get arabic          => isAr ? 'العربية'                       : 'Arabic';
+  String get english         => isAr ? 'الإنجليزية'                    : 'English';
+}
+
+// ─────────────────────────────────────────────
+// مزود اللغة
+// ─────────────────────────────────────────────
+class LanguageProvider extends InheritedWidget {
+  final AppLanguage language;
+  final ValueChanged<AppLanguage> onChanged;
+
+  const LanguageProvider({
+    super.key,
+    required this.language,
+    required this.onChanged,
+    required super.child,
+  });
+
+  AppStrings get strings => AppStrings(language);
+
+  static LanguageProvider of(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<LanguageProvider>()!;
+
+  @override
+  bool updateShouldNotify(LanguageProvider old) => old.language != language;
+}
+
+// ─────────────────────────────────────────────
+// MAIN
+// ─────────────────────────────────────────────
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+    statusBarColor: Colors.transparent,
+    statusBarIconBrightness: Brightness.light,
+  ));
+  runApp(const SmartPlantApp());
+}
+
+class SmartPlantApp extends StatefulWidget {
+  const SmartPlantApp({super.key});
+
+  @override
+  State<SmartPlantApp> createState() => _SmartPlantAppState();
+}
+
+class _SmartPlantAppState extends State<SmartPlantApp> {
+  AppLanguage _language = AppLanguage.arabic;
+
+  // Firebase init كـ Future ثابت — بيتنفذ مرة واحدة بس
+  static final Future<FirebaseApp> _initialization = Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    return LanguageProvider(
+      language: _language,
+      onChanged: (lang) => setState(() => _language = lang),
+      child: Builder(builder: (ctx) {
+        final strings = LanguageProvider.of(ctx).strings;
+        return MaterialApp(
+          title: strings.appTitle,
+          debugShowCheckedModeBanner: false,
+          builder: (context, child) => Directionality(
+            textDirection: _language == AppLanguage.arabic
+                ? TextDirection.rtl
+                : TextDirection.ltr,
+            child: child!,
+          ),
+          theme: ThemeData(
+            fontFamily: 'SF Pro Display',
+            colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF2ECC71)),
+          ),
+          // FutureBuilder يستنى Firebase قبل ما يعرض أي شاشة
+          home: FutureBuilder(
+            future: _initialization,
+            builder: (context, snapshot) {
+              if (snapshot.hasError) {
+                return Scaffold(
+                  backgroundColor: const Color(0xFF16A34A),
+                  body: Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.cloud_off, color: Colors.white, size: 64),
+                          const SizedBox(height: 16),
+                          const Text('فشل الاتصال بـ Firebase',
+                              style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+                          const SizedBox(height: 8),
+                          Text('${snapshot.error}',
+                              style: const TextStyle(color: Colors.white70, fontSize: 13),
+                              textAlign: TextAlign.center),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              }
+              if (snapshot.connectionState != ConnectionState.done) {
+                return const Scaffold(
+                  backgroundColor: Color(0xFF16A34A),
+                  body: Center(child: CircularProgressIndicator(color: Colors.white)),
+                );
+              }
+              return const HomeScreen();
+            },
+          ),
+        );
+      }),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+// HOME SCREEN
+// ─────────────────────────────────────────────
+class HomeScreen extends StatefulWidget {
+  const HomeScreen({super.key});
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  int _selectedIndex = 0;
+
+  static const List<Widget> _pages = [
+    MainDashboard(),
+    StatisticsScreen(),
+    SettingsScreen(),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF16A34A),
+      body: _pages[_selectedIndex],
+      bottomNavigationBar: SafeArea(child: _buildBottomNavBar()),
+    );
+  }
+
+  Widget _buildBottomNavBar() {
+    final s = LanguageProvider.of(context).strings;
+    final items = [
+      {'icon': Icons.home_rounded,      'label': s.navHome},
+      {'icon': Icons.bar_chart_rounded, 'label': s.navStats},
+      {'icon': Icons.settings_rounded,  'label': s.navSettings},
+    ];
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.1),
+        border: Border(top: BorderSide(color: Colors.white.withOpacity(0.1))),
+      ),
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
+        children: List.generate(items.length, (i) {
+          final selected = _selectedIndex == i;
+          return GestureDetector(
+            onTap: () => setState(() => _selectedIndex = i),
+            behavior: HitTestBehavior.opaque,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(
+                color: selected ? Colors.white.withOpacity(0.2) : Colors.transparent,
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(items[i]['icon'] as IconData,
+                      color: selected ? Colors.white : Colors.white60, size: 24),
+                  const SizedBox(height: 4),
+                  Text(items[i]['label'] as String,
+                      style: TextStyle(
+                          color: selected ? Colors.white : Colors.white60,
+                          fontSize: 11)),
+                ],
+              ),
+            ),
+          );
+        }),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+// 1. MAIN DASHBOARD
+// ─────────────────────────────────────────────
+class MainDashboard extends StatefulWidget {
+  const MainDashboard({super.key});
+
+  @override
+  State<MainDashboard> createState() => _MainDashboardState();
+}
+
+class _MainDashboardState extends State<MainDashboard>
+    with TickerProviderStateMixin {
+
+  late final DatabaseReference _dbRef;
+  bool _isPumpLoading = false;
+  bool _autoIrrigation = false;
+  StreamSubscription<DatabaseEvent>? _autoIrrigationSub;
+
+  @override
+  void initState() {
+    super.initState();
+    _dbRef = FirebaseDatabase.instance.ref();
+    _autoIrrigationSub =
+        _dbRef.child('controls/auto_irrigation').onValue.listen((event) {
+      if (!mounted) return;
+      setState(() {
+        _autoIrrigation = (event.snapshot.value as bool?) ?? false;
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _autoIrrigationSub?.cancel();
+    super.dispose();
+  }
+
+  double _parseNum(dynamic value, {double fallback = 0.0}) {
+    if (value == null) return fallback;
+    if (value is num) return value.toDouble();
+    return double.tryParse(value.toString()) ?? fallback;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = LanguageProvider.of(context).strings;
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF4ADE80), Color(0xFF16A34A)],
+        ),
+      ),
+      child: SafeArea(
+        child: StreamBuilder<DatabaseEvent>(
+          stream: _dbRef.child('sensor_data').onValue,
+          builder: (context, snapshot) {
+
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(
+                  child: CircularProgressIndicator(color: Colors.white));
+            }
+
+            if (snapshot.hasError) {
+              return Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.wifi_off, color: Colors.white, size: 48),
+                      const SizedBox(height: 12),
+                      Text('${s.connError}\n${snapshot.error}',
+                          style: const TextStyle(color: Colors.white),
+                          textAlign: TextAlign.center),
+                    ],
+                  ),
+                ),
+              );
+            }
+
+            double moisture = 0, temperature = 0, light = 0;
+            if (snapshot.hasData && snapshot.data!.snapshot.value != null) {
+              final data = Map<dynamic, dynamic>.from(
+                  snapshot.data!.snapshot.value as Map);
+              moisture    = _parseNum(data['moisture']);
+              temperature = _parseNum(data['temp']);
+              light       = _parseNum(data['light']);
+            }
+
+            return SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const SizedBox(height: 20),
+                  _buildHeader(s),
+                  const SizedBox(height: 28),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      _buildGauge(s.moisture,    moisture / 100,    '${moisture.toInt()}%',     Icons.water_drop_outlined,  Colors.blue),
+                      _buildGauge(s.temperature, temperature / 50,  '${temperature.toInt()}°C', Icons.thermostat_outlined,  Colors.orange),
+                      _buildGauge(s.light,       light / 100,       '${light.toInt()}%',         Icons.wb_sunny_outlined,    Colors.purpleAccent),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  _buildPlantHealthCard(moisture, s),
+                  const SizedBox(height: 16),
+                  _buildWaterNowButton(s),
+                  const SizedBox(height: 16),
+                  _buildAutoIrrigationCard(s),
+                  const SizedBox(height: 20),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHeader(AppStrings s) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(s.appTitle,
+            style: const TextStyle(
+                color: Colors.white, fontSize: 32, fontWeight: FontWeight.w800)),
+        Row(children: [
+          const Icon(Icons.wifi, color: Colors.white70, size: 16),
+          const SizedBox(width: 6),
+          Text(s.liveData, style: const TextStyle(color: Colors.white70)),
+        ]),
+      ],
+    );
+  }
+
+  Widget _buildGauge(String label, double val, String text, IconData icon, Color col) {
+    return Column(
+      children: [
+        SizedBox(
+          width: 90, height: 90,
+          child: CustomPaint(
+            painter: GaugePainter(
+                value: val, trackColor: Colors.white12, progressColor: col),
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(icon, color: Colors.white54, size: 16),
+                  Text(text,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold)),
+                ],
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+      ],
+    );
+  }
+
+  Widget _buildPlantHealthCard(double m, AppStrings s) {
+    final isHealthy = m > 30;
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+          color: Colors.white10, borderRadius: BorderRadius.circular(20)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(s.plantStatus, style: const TextStyle(color: Colors.white70)),
+          Text(
+            isHealthy ? s.healthy : s.needsWater,
+            style: TextStyle(
+                color: isHealthy ? Colors.greenAccent : Colors.orangeAccent,
+                fontSize: 24,
+                fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 10),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: (m / 100).clamp(0.0, 1.0),
+              backgroundColor: Colors.white12,
+              color: Colors.greenAccent,
+              minHeight: 6,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWaterNowButton(AppStrings s) {
+    return ElevatedButton.icon(
+      onPressed: _isPumpLoading ? null : () => _triggerPump(s),
+      icon: _isPumpLoading
+          ? const SizedBox(
+              width: 20, height: 20,
+              child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+          : const Icon(Icons.water_drop, color: Colors.white),
+      label: Text(
+        _isPumpLoading ? s.watering : s.waterNow,
+        style: const TextStyle(color: Colors.white, fontSize: 18),
+      ),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: Colors.blue.shade700,
+        disabledBackgroundColor: Colors.blue.shade300,
+        minimumSize: const Size(double.infinity, 60),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      ),
+    );
+  }
+
+  Future<void> _triggerPump(AppStrings s) async {
+    setState(() => _isPumpLoading = true);
+    try {
+      await _dbRef.child('controls').update({'pump': true});
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(s.pumpOn)),
+      );
+      await Future.delayed(const Duration(seconds: 5));
+      await _dbRef.child('controls').update({'pump': false});
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${s.pumpFailed}: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _isPumpLoading = false);
+    }
+  }
+
+  Widget _buildAutoIrrigationCard(AppStrings s) {
+    return Container(
+      decoration: BoxDecoration(
+          color: Colors.white10, borderRadius: BorderRadius.circular(20)),
+      child: SwitchListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+        title: Text(s.autoIrrigation,
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        subtitle: Text(
+          _autoIrrigation ? s.autoOn : s.autoOff,
+          style: const TextStyle(color: Colors.white70),
+        ),
+        value: _autoIrrigation,
+        activeThumbColor: Colors.greenAccent,
+        onChanged: (val) {
+          _dbRef.child('controls').update({'auto_irrigation': val});
+        },
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+// 2. STATISTICS SCREEN
+// ─────────────────────────────────────────────
+class StatisticsScreen extends StatefulWidget {
+  const StatisticsScreen({super.key});
+
+  @override
+  State<StatisticsScreen> createState() => _StatisticsScreenState();
+}
+
+class _StatisticsScreenState extends State<StatisticsScreen> {
+  late final DatabaseReference _dbRef;
+  StreamSubscription<DatabaseEvent>? _sub;
+  final List<FlSpot> _spots = [];
+  int _tick = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _dbRef = FirebaseDatabase.instance.ref();
+    _sub = _dbRef.child('sensor_data').onValue.listen((event) {
+      if (!mounted) return;
+      final val = event.snapshot.value;
+      if (val == null) return;
+      final data = Map<dynamic, dynamic>.from(val as Map);
+      final moisture =
+          (data['moisture'] is num ? data['moisture'] as num : 0).toDouble();
+      setState(() {
+        _spots.add(FlSpot(_tick.toDouble(), moisture));
+        if (_spots.length > 20) _spots.removeAt(0);
+        _tick++;
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = LanguageProvider.of(context).strings;
+    final hasData = _spots.length >= 2;
+
+    return Padding(
+      padding: const EdgeInsets.all(20.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SizedBox(height: 40),
+          Text(s.statistics,
+              style: const TextStyle(
+                  color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 40),
+          Expanded(
+            child: hasData
+                ? LineChart(LineChartData(
+                    gridData: const FlGridData(show: false),
+                    titlesData: const FlTitlesData(show: false),
+                    borderData: FlBorderData(show: false),
+                    minY: 0,
+                    maxY: 100,
+                    lineBarsData: [
+                      LineChartBarData(
+                        spots: _spots,
+                        isCurved: true,
+                        color: Colors.white,
+                        barWidth: 4,
+                        dotData: const FlDotData(show: false),
+                        belowBarData:
+                            BarAreaData(show: true, color: Colors.white10),
+                      ),
+                    ],
+                  ))
+                : Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const CircularProgressIndicator(color: Colors.white),
+                        const SizedBox(height: 16),
+                        Text(s.waitingData,
+                            style: const TextStyle(color: Colors.white70)),
+                      ],
+                    ),
+                  ),
+          ),
+          Center(
+              child: Text(s.chartLabel,
+                  style: const TextStyle(color: Colors.white70))),
+          const SizedBox(height: 20),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+// 3. SETTINGS SCREEN
+// ─────────────────────────────────────────────
+class SettingsScreen extends StatefulWidget {
+  const SettingsScreen({super.key});
+
+  @override
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  double _threshold = 40.0;
+  late final DatabaseReference _dbRef;
+
+  @override
+  void initState() {
+    super.initState();
+    _dbRef = FirebaseDatabase.instance.ref();
+    _dbRef.child('settings/moisture_threshold').get().then((snap) {
+      if (!mounted) return;
+      if (snap.value != null) {
+        setState(() {
+          _threshold = (snap.value as num).toDouble().clamp(0.0, 100.0);
+        });
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final provider = LanguageProvider.of(context);
+    final s = provider.strings;
+
+    return Padding(
+      padding: const EdgeInsets.all(20.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SizedBox(height: 40),
+          Text(s.settings,
+              style: const TextStyle(
+                  color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 32),
+
+          // ── قسم اللغة ──────────────────────────
+          Text(s.language,
+              style: const TextStyle(color: Colors.white70, fontSize: 14)),
+          const SizedBox(height: 12),
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white10,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Row(
+              children: [
+                _buildLangButton(
+                  label: s.arabic,
+                  selected: provider.language == AppLanguage.arabic,
+                  onTap: () => provider.onChanged(AppLanguage.arabic),
+                ),
+                _buildLangButton(
+                  label: s.english,
+                  selected: provider.language == AppLanguage.english,
+                  onTap: () => provider.onChanged(AppLanguage.english),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 32),
+
+          // ── عتبة الرطوبة ──────────────────────
+          Text(s.threshold, style: const TextStyle(color: Colors.white70)),
+          Slider(
+            value: _threshold,
+            min: 0,
+            max: 100,
+            divisions: 100,
+            activeColor: Colors.white,
+            inactiveColor: Colors.white24,
+            onChanged: (v) => setState(() => _threshold = v),
+          ),
+          Center(
+              child: Text('${_threshold.toInt()}%',
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold))),
+
+          const Spacer(),
+
+          ElevatedButton(
+            onPressed: () {
+              _dbRef.child('settings')
+                  .update({'moisture_threshold': _threshold.toInt()});
+              ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(s.savedCloud)));
+            },
+            style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.white,
+                foregroundColor: Colors.green,
+                minimumSize: const Size(double.infinity, 50)),
+            child: Text(s.saveSettings),
+          ),
+          const SizedBox(height: 20),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLangButton({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          decoration: BoxDecoration(
+            color: selected ? Colors.white : Colors.transparent,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          alignment: Alignment.center,
+          child: Text(
+            label,
+            style: TextStyle(
+              color: selected ? Colors.green.shade700 : Colors.white70,
+              fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+              fontSize: 15,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+// GAUGE PAINTER
+// ─────────────────────────────────────────────
+class GaugePainter extends CustomPainter {
+  final double value;
+  final Color trackColor;
+  final Color progressColor;
+
+  const GaugePainter({
+    required this.value,
+    required this.trackColor,
+    required this.progressColor,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = (size.width / 2) - 4;
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 6
+      ..strokeCap = StrokeCap.round;
+
+    canvas.drawArc(
+      Rect.fromCircle(center: center, radius: radius),
+      math.pi * 0.75,
+      math.pi * 1.5,
+      false,
+      paint..color = trackColor,
+    );
+
+    final clamped = value.clamp(0.0, 1.0);
+    if (clamped > 0) {
+      canvas.drawArc(
+        Rect.fromCircle(center: center, radius: radius),
+        math.pi * 0.75,
+        math.pi * 1.5 * clamped,
+        false,
+        paint..color = progressColor,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(GaugePainter oldDelegate) =>
+      oldDelegate.value != value || oldDelegate.progressColor != progressColor;
+}
