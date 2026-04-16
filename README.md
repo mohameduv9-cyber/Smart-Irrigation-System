@@ -33,3 +33,4 @@ The system implements a protection layer for the pump:
 
 ---
 *Developed as part of my Electrical Engineering projects.*
+![Hardware Setup](H.W.jpg)
