@@ -10,7 +10,7 @@ An automated IoT irrigation system designed to optimize water usage by monitorin
 - **Android App:** Dedicated mobile application for control and status updates.
 
 ## 🛠 Hardware Components
-- **Microcontroller:** ESP32 (NodeMCU).
+- **Microcontroller:** ESP32 (devkit v1).
 - **Sensors:** DHT11 (Temp/Hum), Soil Moisture Sensor, LDR (Light).
 - **Actuators:** 5V Relay Module, Water Pump.
 - **Others:** LCD 16x2 (I2C), Power Supply.
@@ -28,7 +28,7 @@ An automated IoT irrigation system designed to optimize water usage by monitorin
 
 ## 🔧 Safety Logic (Code Snippet)
 The system implements a protection layer for the pump:
-- If the pump runs for more than X minutes, it enters **Cooldown Mode**.
+- If the pump runs for more than 30 minutes, it enters **Cooldown Mode**.
 - Emergency stop if no water flow is detected (Safety Trip).
 
 ---
